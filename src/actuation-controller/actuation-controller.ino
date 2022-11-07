@@ -139,7 +139,6 @@ void handleControllerSet() {
   lcd.print(setActuationCount);
 }
 
-
 void handleControllerSetting() {
   if (buttonUp) {
     controllerState = CTRL_TRACK;
@@ -162,7 +161,7 @@ void handleControllerTrack() {
 
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Progress:");
+  lcd.print("Running:");
   lcd.setCursor(0, 1);
   lcd.print(actuationCount);
   lcd.setCursor(8, 1);
@@ -171,6 +170,7 @@ void handleControllerTrack() {
   lcd.print(setActuationCount);
 }
 
+// Temp setupremove until we start reading real inputs
 unsigned long timestamp = 0;
 unsigned long prevTimestamp = 0;
 void handleControllerTracking() {
@@ -207,7 +207,7 @@ void handleControllerPause() {
 
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Paused, continue?");
+  lcd.print("Continue?");
   lcd.setCursor(0, 1);
   lcd.print(pauseContinue ? "Yes" : " No");
 }
