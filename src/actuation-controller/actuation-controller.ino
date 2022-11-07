@@ -43,6 +43,8 @@ bool buttonUp = false;
 int controllerState = CTRL_BOOT;
 int prevControllerState = CTRL_BOOT;
 
+bool pauseContinue = true;
+
 // a variable to choose which reply from the crystal ball
 int reply;
 
@@ -52,14 +54,6 @@ void setup() {
   pinMode(D_BUTTON, INPUT);
 
   controllerState = CTRL_START;
-}
-
-void printLcd(char* line0, char* line1) {
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(line0);
-      lcd.setCursor(0, 1);
-      lcd.print(line1);
 }
 
 void loop() {
@@ -93,6 +87,18 @@ void loop() {
       case CTRL_START:
         handleControllerStarting();
         break;
+      case CTRL_SET:
+        handleControllerSetting();
+        break;
+      case CTRL_TRACK:
+        handleControllerTracking();
+        break;
+      case CTRL_PAUSE:
+        handleControllerPausing();
+        break;
+      default:
+        handleControllerWaiting();
+        break;
     }
   }
 
@@ -107,12 +113,14 @@ void handleControllerStart() {
   lcd.setCursor(0, 1);
   lcd.print(prevActuationCount);
   
+  actuationCount = 0;
   prevActuationCount = 0;
 }
 
 void handleControllerStarting() {
   if (buttonUp) {
     controllerState = CTRL_SET;
+    return;
   }
 }
 
@@ -127,15 +135,16 @@ void handleControllerSet() {
 void handleControllerSetting() {
   if (buttonUp) {
     controllerState = CTRL_TRACK;
+    return;
   }
 
-  // TODO Pot selector for iterations
+  // TODO Knob selector for iterations
 }
 
 void handleControllerTrack() {
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("Set actuations:");
+  lcd.print("Progress:");
   lcd.setCursor(0, 1);
   lcd.print(actuationCount);
   lcd.setCursor(8, 1);
@@ -144,23 +153,72 @@ void handleControllerTrack() {
   lcd.print(setActuationCount);
 }
 
+unsigned long timestamp = 0;
+unsigned long prevTimestamp = 0;
 void handleControllerTracking() {
+  timestamp = millis();
+  if (timestamp - prevTimestamp > 1000) {
+    actuationCount++;
+    prevTimestamp = timestamp;
+  }
+
   if (actuationCount != prevActuationCount) {
     lcd.setCursor(0, 1);
     lcd.print(actuationCount);
+    prevActuationCount = actuationCount;
 
-    // TODO Decide when to save to eeprom
+    // TODO Decide when to save to eeprom (every 5%)
+  }
+
+  if (actuationCount >= setActuationCount) {
+    controllerState = CTRL_DONE;
+    return;
+  }
+
+  if (buttonUp) {
+    controllerState = CTRL_PAUSE;
+    return;
   }
 }
 
 void handleControllerPause() {
-
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Paused, continue?");
+  lcd.setCursor(0, 1);
+  lcd.print(pauseContinue ? "Yes" : " No");
 }
 
 void handleControllerPausing() {
+  if (buttonUp) {
+    if (pauseContinue) {
+      controllerState = CTRL_TRACK;
+      return;
+    }
+    
+    controllerState = CTRL_DONE;
+    return;
+  }
 
+  // TODO Knob selection 
 }
 
 void handleControllerDone() {
+  EEPROM.put(ADDR_LAST_COUNT, prevActuationCount);
 
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Finished!");
+  lcd.setCursor(0, 1);
+  lcd.print(actuationCount);
+  lcd.setCursor(8, 1);
+  lcd.print("/");
+  lcd.setCursor(10, 1);
+  lcd.print(setActuationCount);
+}
+
+void handleControllerWaiting() {
+  if (buttonUp) {
+    controllerState = CTRL_START;
+  }
 }
