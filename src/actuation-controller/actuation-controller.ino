@@ -9,7 +9,7 @@ enum DIGITAL_PINS {
   D_BUTTON = 13,
   D_LCD_RS = 12,
   D_LCD_EN = 11,
-  D_LED_ON = 7,
+  D_RLY_ON = 7,
   D_LCD_D4 = 5,
   D_LCD_D5 = 4,
   D_LCD_D6 = 3,
@@ -32,26 +32,33 @@ enum EEPROM_ADDRESSES {
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd(D_LCD_RS, D_LCD_EN, D_LCD_D4, D_LCD_D5, D_LCD_D6, D_LCD_D7);
 
+const long MIN_ACTUATIONS = 1000L;
+const long MAX_ACTUATIONS = 100000L;
+const long SET_ACTUATIONS_STEP = 1000L;
+
+int controllerState = CTRL_BOOT;
+int prevControllerState = CTRL_BOOT;
+
 long actuationCount = 0;
 long prevActuationCount = 0;
-long setActuationCount = 10; // Default
+long setActuationCount = MIN_ACTUATIONS;
 
 int buttonState = 0;
 int prevButtonState = 0;
 bool buttonUp = false;
 
-int controllerState = CTRL_BOOT;
-int prevControllerState = CTRL_BOOT;
+int knobValue = 0;
+int prevKnobValue = 0;
 
 bool pauseContinue = true;
-
-// a variable to choose which reply from the crystal ball
-int reply;
 
 void setup() {
   lcd.begin(16, 2);
 
   pinMode(D_BUTTON, INPUT);
+  pinMode(D_RLY_ON, OUTPUT);
+
+  digitalWrite(D_RLY_ON, LOW);
 
   controllerState = CTRL_START;
 }
@@ -132,16 +139,27 @@ void handleControllerSet() {
   lcd.print(setActuationCount);
 }
 
+
 void handleControllerSetting() {
   if (buttonUp) {
     controllerState = CTRL_TRACK;
     return;
   }
 
-  // TODO Knob selector for iterations
+  knobValue = analogRead(A_KNOB) / 10 + 1; // Compress read resolution to ~100 steps
+  if (knobValue != prevKnobValue) {
+    setActuationCount = min(knobValue * SET_ACTUATIONS_STEP, MAX_ACTUATIONS);
+    lcd.setCursor(0, 1);
+    lcd.print("        ");
+    lcd.setCursor(0, 1);
+    lcd.print(setActuationCount);
+    prevKnobValue = knobValue;
+  }
 }
 
 void handleControllerTrack() {
+  digitalWrite(D_RLY_ON, HIGH);
+
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Progress:");
@@ -157,7 +175,7 @@ unsigned long timestamp = 0;
 unsigned long prevTimestamp = 0;
 void handleControllerTracking() {
   timestamp = millis();
-  if (timestamp - prevTimestamp > 1000) {
+  if (timestamp - prevTimestamp > 1000UL) {
     actuationCount++;
     prevTimestamp = timestamp;
   }
@@ -167,7 +185,10 @@ void handleControllerTracking() {
     lcd.print(actuationCount);
     prevActuationCount = actuationCount;
 
-    // TODO Decide when to save to eeprom (every 5%)
+    // Save to eeprom every 5% progress made
+    if (actuationCount * 100L / setActuationCount % 5L) {
+      EEPROM.put(ADDR_LAST_COUNT, actuationCount);
+    }
   }
 
   if (actuationCount >= setActuationCount) {
@@ -182,6 +203,8 @@ void handleControllerTracking() {
 }
 
 void handleControllerPause() {
+  digitalWrite(D_RLY_ON, LOW);
+
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Paused, continue?");
@@ -200,10 +223,18 @@ void handleControllerPausing() {
     return;
   }
 
-  // TODO Knob selection 
+  knobValue = analogRead(A_KNOB) / 512; // Compress read resolution to on/off
+  if (knobValue != prevKnobValue) {
+    pauseContinue = knobValue;
+    prevKnobValue = knobValue;
+
+    lcd.setCursor(0, 1);
+    lcd.print(pauseContinue ? "Yes" : " No");
+  }
 }
 
 void handleControllerDone() {
+  digitalWrite(D_RLY_ON, LOW);
   EEPROM.put(ADDR_LAST_COUNT, prevActuationCount);
 
   lcd.clear();
