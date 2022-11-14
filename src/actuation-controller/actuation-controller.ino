@@ -2,7 +2,8 @@
 #include <LiquidCrystal.h>
 
 enum ANALOG_PINS {
-  A_KNOB = A0
+  A_KNOB = A0,
+  A_IR_SENSOR = A1
 };
 
 enum DIGITAL_PINS {
@@ -13,8 +14,7 @@ enum DIGITAL_PINS {
   D_LCD_D4 = 6,
   D_LCD_D5 = 5,
   D_LCD_D6 = 4,
-  D_LCD_D7 = 3,
-  D_IR_SENSOR = 2
+  D_LCD_D7 = 3
 };
 
 enum CONTROLLER_STATE {
@@ -37,6 +37,8 @@ const long MIN_ACTUATIONS = 1000L;
 const long MAX_ACTUATIONS = 100000L;
 const long SET_ACTUATIONS_STEP = 1000L;
 
+const int IR_SENSOR_THRESHOLD = 70;
+
 int controllerState = CTRL_BOOT;
 int prevControllerState = CTRL_BOOT;
 
@@ -51,15 +53,17 @@ bool buttonUp = false;
 int knobValue = 0;
 int prevKnobValue = 0;
 
+int irSensorValue = 0;
+int prevIrSensorValue = 0;
+
 bool pauseContinue = true;
 
 void setup() {
+  Serial.begin(9600);
   lcd.begin(16, 2);
 
   pinMode(D_BUTTON, INPUT);
   pinMode(D_RLY_ON, OUTPUT);
-  pinMode(D_IR_SENSOR, INPUT);
-  attachInterrupt(digitalPinToInterrupt(D_IR_SENSOR), handleActuation, RISING);
 
   digitalWrite(D_RLY_ON, LOW);
 
@@ -154,7 +158,8 @@ void handleControllerSetting() {
     return;
   }
 
-  knobValue = analogRead(A_KNOB) / 10 + 1; // Compress read resolution to ~100 steps
+  // Compress read resolution to ~100 steps
+  knobValue = analogRead(A_KNOB) / 10 + 1; 
   if (knobValue != prevKnobValue) {
     setActuationCount = min(knobValue * SET_ACTUATIONS_STEP, MAX_ACTUATIONS);
     lcd.setCursor(0, 1);
@@ -179,15 +184,16 @@ void handleControllerTrack() {
   lcd.print(setActuationCount);
 }
 
-// Temp setupremove until we start reading real inputs
-// unsigned long timestamp = 0;
-// unsigned long prevTimestamp = 0;
 void handleControllerTracking() {
-  // timestamp = millis();
-  // if (timestamp - prevTimestamp > 1000UL) {
-  //   actuationCount++;
-  //   prevTimestamp = timestamp;
-  // }
+  // Compress read resolution to ~100 steps
+  irSensorValue = analogRead(A_IR_SENSOR) / 10; 
+  Serial.println(irSensorValue);
+  // IR Sensor values are HIGH by default and change to LOW when something gets close enough
+  // So read a RISING signal past the threshold to detect object leaving sensor area
+  if (prevIrSensorValue < IR_SENSOR_THRESHOLD && irSensorValue > IR_SENSOR_THRESHOLD) { 
+    actuationCount++;
+  }
+  prevIrSensorValue = irSensorValue;
 
   if (actuationCount != prevActuationCount) {
     lcd.setCursor(0, 1);
@@ -232,7 +238,8 @@ void handleControllerPausing() {
     return;
   }
 
-  knobValue = analogRead(A_KNOB) / 512; // Compress read resolution to on/off
+  // Compress read resolution to on/off
+  knobValue = analogRead(A_KNOB) / 512; 
   if (knobValue != prevKnobValue) {
     pauseContinue = knobValue;
     prevKnobValue = knobValue;
