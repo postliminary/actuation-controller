@@ -10,10 +10,11 @@ enum DIGITAL_PINS {
   D_LCD_RS = 12,
   D_LCD_EN = 11,
   D_RLY_ON = 7,
-  D_LCD_D4 = 5,
-  D_LCD_D5 = 4,
-  D_LCD_D6 = 3,
-  D_LCD_D7 = 2
+  D_LCD_D4 = 6,
+  D_LCD_D5 = 5,
+  D_LCD_D6 = 4,
+  D_LCD_D7 = 3,
+  D_IR_SENSOR = 2
 };
 
 enum CONTROLLER_STATE {
@@ -57,6 +58,8 @@ void setup() {
 
   pinMode(D_BUTTON, INPUT);
   pinMode(D_RLY_ON, OUTPUT);
+  pinMode(D_IR_SENSOR, INPUT);
+  attachInterrupt(digitalPinToInterrupt(D_IR_SENSOR), handleActuation, RISING);
 
   digitalWrite(D_RLY_ON, LOW);
 
@@ -109,6 +112,12 @@ void loop() {
     }
   }
 
+}
+
+void handleActuation() {
+  if (controllerState == CTRL_TRACK) {
+    actuationCount++;
+  }
 }
 
 void handleControllerStart() {
@@ -171,14 +180,14 @@ void handleControllerTrack() {
 }
 
 // Temp setupremove until we start reading real inputs
-unsigned long timestamp = 0;
-unsigned long prevTimestamp = 0;
+// unsigned long timestamp = 0;
+// unsigned long prevTimestamp = 0;
 void handleControllerTracking() {
-  timestamp = millis();
-  if (timestamp - prevTimestamp > 1000UL) {
-    actuationCount++;
-    prevTimestamp = timestamp;
-  }
+  // timestamp = millis();
+  // if (timestamp - prevTimestamp > 1000UL) {
+  //   actuationCount++;
+  //   prevTimestamp = timestamp;
+  // }
 
   if (actuationCount != prevActuationCount) {
     lcd.setCursor(0, 1);
