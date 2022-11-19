@@ -61,10 +61,12 @@ unsigned long irCalibrationTimestamp = 0;
 unsigned long irCalibrationPrevTimestamp = 0;
 int irSensorCalibratedThreshold = 0;
 
-char trackProgressString[16];
 char trackSensorString[16];
+char trackProgressString[16];
+char trackProgressBarString[16];
+int trackProgressBarSize = 13; // Match size of progress format output
 char TRACK_PROGRESS_FORMAT[] = "%-6ld/%6ld";
-char TRACK_SENSOR_FORMAT[] = "tracking %4d";
+char TRACK_SENSOR_FORMAT[] = "~%-4d";
 
 bool pauseContinue = true;
 
@@ -134,12 +136,6 @@ void loop() {
 
 }
 
-void handleActuation() {
-  if (controllerState == CTRL_TRACK) {
-    actuationCount++;
-  }
-}
-
 void handleControllerStart() {
   EEPROM.get(ADDR_LAST_COUNT, actuationPrevCount);
 
@@ -162,12 +158,16 @@ void handleControllerStarting() {
   }
 }
 
-void handleControllerSet() {
+void printControllerSet() {
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.println("Set actuations:");
   oled.println(actuationSetCount);
   oled.display();
+}
+
+void handleControllerSet() {
+  printControllerSet();
 }
 
 void handleControllerSetting() {
@@ -184,23 +184,38 @@ void handleControllerSetting() {
       actuationSetCount = MIN_ACTUATIONS;
     }
 
-    oled.clearDisplay();
-    oled.setCursor(0, 0);
-    oled.println("Set actuations:");
-    oled.println(actuationSetCount);
-    oled.display();
+    printControllerSet();
   }
 }
 
-void handleControllerTrack() {
-  digitalWrite(D_PMOS_GATE, LOW);
+void printControllerTrack() {
+  int percent = actuationCount * 100L / actuationSetCount;
+  int sections = actuationCount * trackProgressBarSize / actuationSetCount;
+  for (int i = 0; i < trackProgressBarSize; i++) {
+    trackProgressBarString[i] = i < sections
+      ? '\xB1'
+      : '_';
+  }
+  trackProgressBarString[trackProgressBarSize] = ' ';
+  trackProgressBarString[trackProgressBarSize + 1] = percent / 10 + '0';
+  trackProgressBarString[trackProgressBarSize + 2] = percent % 10 + '0';
+  trackProgressBarString[trackProgressBarSize + 3] = '%';
 
   sprintf(trackProgressString, TRACK_PROGRESS_FORMAT, actuationCount, actuationSetCount);
+  sprintf(trackSensorString, TRACK_SENSOR_FORMAT, irSensorCalibratedThreshold);
+
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.println("Running:");
   oled.println(trackProgressString);
+  oled.println(trackSensorString);
+  oled.println(trackProgressBarString);
   oled.display();
+}
+
+void handleControllerTrack() {
+  digitalWrite(D_PMOS_GATE, LOW);
+  printControllerTrack();
 }
 
 void handleControllerTracking() {
@@ -232,14 +247,7 @@ void handleControllerTracking() {
       EEPROM.put(ADDR_LAST_COUNT, actuationCount);
     }
 
-    sprintf(trackProgressString, TRACK_PROGRESS_FORMAT, actuationCount, actuationSetCount);
-    sprintf(trackSensorString, TRACK_SENSOR_FORMAT, irSensorCalibratedThreshold);
-    oled.clearDisplay();
-    oled.setCursor(0, 0);
-    oled.println("Running:");
-    oled.println(trackProgressString);
-    oled.println(trackSensorString);
-    oled.display();
+    printControllerTrack();
   }
 
   if (actuationCount >= actuationSetCount) {
@@ -253,14 +261,18 @@ void handleControllerTracking() {
   }
 }
 
-void handleControllerPause() {
-  digitalWrite(D_PMOS_GATE, HIGH);
-
+void printControllerPause() {
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.println("Continue?");
   oled.println(pauseContinue ? "Yes": "No");
   oled.display();
+}
+
+void handleControllerPause() {
+  digitalWrite(D_PMOS_GATE, HIGH);
+  printControllerPause();
+  delay(300);
 }
 
 void handleControllerPausing() {
@@ -276,12 +288,7 @@ void handleControllerPausing() {
 
   if (changeButtonUp) {
     pauseContinue = !pauseContinue;
-
-    oled.clearDisplay();
-    oled.setCursor(0, 0);
-    oled.println("Continue?");
-    oled.println(pauseContinue ? "Yes": "No");
-    oled.display();
+    printControllerPause();
   }
 }
 
