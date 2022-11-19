@@ -1,20 +1,27 @@
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include <EEPROM.h>
-#include <LiquidCrystal.h>
+
+#define SCREEN_WIDTH          128 // OLED display width, in pixels
+#define SCREEN_HEIGHT         32 // OLED display height, in pixels
+#define OLED_RESET            -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS        0x3C // See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+#define MIN_ACTUATIONS        5000L
+#define MAX_ACTUATIONS        100000L
+#define SET_ACTUATIONS_STEP   5000L
+#define IR_SENSOR_CAL_SAMPLE  INT16_MAX // Number of sample to take to calibrate sensor
+#define IR_SENSOR_CAL_DELAY   50 // Millis delay between sampling
 
 enum ANALOG_PINS {
-  A_KNOB = A0,
-  A_IR_SENSOR = A1
+  A_IR_SENSOR = A0
 };
 
 enum DIGITAL_PINS {
-  D_BUTTON = 13,
-  D_LCD_RS = 12,
-  D_LCD_EN = 11,
-  D_RLY_ON = 7,
-  D_LCD_D4 = 6,
-  D_LCD_D5 = 5,
-  D_LCD_D6 = 4,
-  D_LCD_D7 = 3
+  D_BUTTON_ACCEPT = 2,
+  D_BUTTON_CHANGE = 3,
+  D_PMOS_GATE = 7
 };
 
 enum CONTROLLER_STATE {
@@ -30,53 +37,62 @@ enum EEPROM_ADDRESSES {
   ADDR_LAST_COUNT
 };
 
-// initialize the library with the numbers of the interface pins
-LiquidCrystal lcd(D_LCD_RS, D_LCD_EN, D_LCD_D4, D_LCD_D5, D_LCD_D6, D_LCD_D7);
-
-const long MIN_ACTUATIONS = 1000L;
-const long MAX_ACTUATIONS = 100000L;
-const long SET_ACTUATIONS_STEP = 1000L;
-
-const int IR_SENSOR_THRESHOLD = 70;
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 int controllerState = CTRL_BOOT;
-int prevControllerState = CTRL_BOOT;
+int controllerPrevState = CTRL_BOOT;
 
 long actuationCount = 0;
-long prevActuationCount = 0;
-long setActuationCount = MIN_ACTUATIONS;
+long actuationPrevCount = 0;
+long actuationSetCount = MIN_ACTUATIONS;
 
-int buttonState = 0;
-int prevButtonState = 0;
-bool buttonUp = false;
+int acceptButtonState = 0;
+int acceptButtonPrevState = 0;
+bool acceptButtonUp = false;
 
-int knobValue = 0;
-int prevKnobValue = 0;
+int changeButtonState = 0;
+int changeButtonPrevState = 0;
+bool changeButtonUp = false;
 
 int irSensorValue = 0;
 int prevIrSensorValue = 0;
+int irSensorCalibrationCount = 0;
+unsigned long irCalibrationTimestamp = 0;
+unsigned long irCalibrationPrevTimestamp = 0;
+int irSensorCalibratedThreshold = 0;
+
+char trackProgressString[16];
+char trackSensorString[16];
+char TRACK_PROGRESS_FORMAT[] = "%-6ld/%6ld";
+char TRACK_SENSOR_FORMAT[] = "tracking %4d";
 
 bool pauseContinue = true;
 
 void setup() {
-  Serial.begin(9600);
-  lcd.begin(16, 2);
+  oled.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS);
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
 
-  pinMode(D_BUTTON, INPUT);
-  pinMode(D_RLY_ON, OUTPUT);
+  pinMode(D_BUTTON_ACCEPT, INPUT);
+  pinMode(D_BUTTON_CHANGE, INPUT);
+  pinMode(D_PMOS_GATE, OUTPUT);
 
-  digitalWrite(D_RLY_ON, LOW);
+  digitalWrite(D_PMOS_GATE, HIGH);
 
   controllerState = CTRL_START;
 }
 
 void loop() {
-  // check the status of the switch
-  buttonState = digitalRead(D_BUTTON);
-  buttonUp = buttonState != prevButtonState && buttonState == LOW;
-  prevButtonState = buttonState;
+  // Check the status of the buttons
+  acceptButtonState = digitalRead(D_BUTTON_ACCEPT);
+  acceptButtonUp = acceptButtonState != acceptButtonPrevState && acceptButtonState == LOW;
+  acceptButtonPrevState = acceptButtonState;
 
-  if (controllerState != prevControllerState) {
+  changeButtonState = digitalRead(D_BUTTON_CHANGE);
+  changeButtonUp = changeButtonState != changeButtonPrevState && changeButtonState == LOW;
+  changeButtonPrevState = changeButtonState;
+
+  if (controllerState != controllerPrevState) {
     // Moving to new state
     switch (controllerState) {
       case CTRL_START:
@@ -95,7 +111,7 @@ void loop() {
         handleControllerDone();
         break;
     }
-    prevControllerState = controllerState;
+    controllerPrevState = controllerState;
   } else {
     switch (controllerState) {
       case CTRL_START:
@@ -125,110 +141,130 @@ void handleActuation() {
 }
 
 void handleControllerStart() {
-  EEPROM.get(ADDR_LAST_COUNT, prevActuationCount);
+  EEPROM.get(ADDR_LAST_COUNT, actuationPrevCount);
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Last run:");
-  lcd.setCursor(0, 1);
-  lcd.print(prevActuationCount);
+  oled.clearDisplay();
+  oled.setCursor(0, 0);
+  oled.println("Last run:");
+  oled.println(actuationPrevCount);
+  oled.display();
   
   actuationCount = 0;
-  prevActuationCount = 0;
+  actuationPrevCount = 0;
+  irSensorCalibrationCount = 0;
+  irSensorCalibratedThreshold = 0;
 }
 
 void handleControllerStarting() {
-  if (buttonUp) {
+  if (acceptButtonUp) {
     controllerState = CTRL_SET;
     return;
   }
 }
 
 void handleControllerSet() {
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Set actuations:");
-  lcd.setCursor(0, 1);
-  lcd.print(setActuationCount);
+  oled.clearDisplay();
+  oled.setCursor(0, 0);
+  oled.println("Set actuations:");
+  oled.println(actuationSetCount);
+  oled.display();
 }
 
 void handleControllerSetting() {
-  if (buttonUp) {
+  if (acceptButtonUp) {
     controllerState = CTRL_TRACK;
     return;
   }
 
-  // Compress read resolution to ~100 steps
-  knobValue = analogRead(A_KNOB) / 10 + 1; 
-  if (knobValue != prevKnobValue) {
-    setActuationCount = min(knobValue * SET_ACTUATIONS_STEP, MAX_ACTUATIONS);
-    lcd.setCursor(0, 1);
-    lcd.print("        ");
-    lcd.setCursor(0, 1);
-    lcd.print(setActuationCount);
-    prevKnobValue = knobValue;
+
+  if (changeButtonUp) {
+    actuationSetCount += SET_ACTUATIONS_STEP;
+
+    if (actuationSetCount > MAX_ACTUATIONS) {
+      actuationSetCount = MIN_ACTUATIONS;
+    }
+
+    oled.clearDisplay();
+    oled.setCursor(0, 0);
+    oled.println("Set actuations:");
+    oled.println(actuationSetCount);
+    oled.display();
   }
 }
 
 void handleControllerTrack() {
-  digitalWrite(D_RLY_ON, HIGH);
+  digitalWrite(D_PMOS_GATE, LOW);
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Running:");
-  lcd.setCursor(0, 1);
-  lcd.print(actuationCount);
-  lcd.setCursor(8, 1);
-  lcd.print("/");
-  lcd.setCursor(10, 1);
-  lcd.print(setActuationCount);
+  sprintf(trackProgressString, TRACK_PROGRESS_FORMAT, actuationCount, actuationSetCount);
+  oled.clearDisplay();
+  oled.setCursor(0, 0);
+  oled.println("Running:");
+  oled.println(trackProgressString);
+  oled.display();
 }
 
 void handleControllerTracking() {
-  // Compress read resolution to ~100 steps
-  irSensorValue = analogRead(A_IR_SENSOR) / 10; 
-  Serial.println(irSensorValue);
+  irSensorValue = analogRead(A_IR_SENSOR) / 4;
+
+  // "Auto-calibrate" sensor
+  if (irSensorCalibrationCount < INT16_MAX) {
+    irCalibrationTimestamp = millis();
+    if (irCalibrationTimestamp - irCalibrationPrevTimestamp > IR_SENSOR_CAL_DELAY) {
+      // Add value to average
+      irSensorCalibrationCount++;
+      irSensorCalibratedThreshold = irSensorCalibratedThreshold + ((irSensorValue - irSensorCalibratedThreshold) / irSensorCalibrationCount);
+      irCalibrationPrevTimestamp = irCalibrationTimestamp;
+    }
+  }
+
   // IR Sensor values are HIGH by default and change to LOW when something gets close enough
   // So read a RISING signal past the threshold to detect object leaving sensor area
-  if (prevIrSensorValue < IR_SENSOR_THRESHOLD && irSensorValue > IR_SENSOR_THRESHOLD) { 
+  if (prevIrSensorValue < irSensorCalibratedThreshold && irSensorValue > irSensorCalibratedThreshold) { 
     actuationCount++;
   }
   prevIrSensorValue = irSensorValue;
 
-  if (actuationCount != prevActuationCount) {
-    lcd.setCursor(0, 1);
-    lcd.print(actuationCount);
-    prevActuationCount = actuationCount;
+  if (actuationCount != actuationPrevCount) {
+    actuationPrevCount = actuationCount;
 
     // Save to eeprom every 5% progress made
-    if (actuationCount * 100L / setActuationCount % 5L) {
+    if (actuationCount * 100L / actuationSetCount % 5L) {
       EEPROM.put(ADDR_LAST_COUNT, actuationCount);
     }
+
+    sprintf(trackProgressString, TRACK_PROGRESS_FORMAT, actuationCount, actuationSetCount);
+    sprintf(trackSensorString, TRACK_SENSOR_FORMAT, irSensorCalibratedThreshold);
+    oled.clearDisplay();
+    oled.setCursor(0, 0);
+    oled.println("Running:");
+    oled.println(trackProgressString);
+    oled.println(trackSensorString);
+    oled.display();
   }
 
-  if (actuationCount >= setActuationCount) {
+  if (actuationCount >= actuationSetCount) {
     controllerState = CTRL_DONE;
     return;
   }
 
-  if (buttonUp) {
+  if (acceptButtonUp) {
     controllerState = CTRL_PAUSE;
     return;
   }
 }
 
 void handleControllerPause() {
-  digitalWrite(D_RLY_ON, LOW);
+  digitalWrite(D_PMOS_GATE, HIGH);
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Continue?");
-  lcd.setCursor(0, 1);
-  lcd.print(pauseContinue ? "Yes" : " No");
+  oled.clearDisplay();
+  oled.setCursor(0, 0);
+  oled.println("Continue?");
+  oled.println(pauseContinue ? "Yes": "No");
+  oled.display();
 }
 
 void handleControllerPausing() {
-  if (buttonUp) {
+  if (acceptButtonUp) {
     if (pauseContinue) {
       controllerState = CTRL_TRACK;
       return;
@@ -238,34 +274,31 @@ void handleControllerPausing() {
     return;
   }
 
-  // Compress read resolution to on/off
-  knobValue = analogRead(A_KNOB) / 512; 
-  if (knobValue != prevKnobValue) {
-    pauseContinue = knobValue;
-    prevKnobValue = knobValue;
+  if (changeButtonUp) {
+    pauseContinue = !pauseContinue;
 
-    lcd.setCursor(0, 1);
-    lcd.print(pauseContinue ? "Yes" : " No");
+    oled.clearDisplay();
+    oled.setCursor(0, 0);
+    oled.println("Continue?");
+    oled.println(pauseContinue ? "Yes": "No");
+    oled.display();
   }
 }
 
 void handleControllerDone() {
-  digitalWrite(D_RLY_ON, LOW);
-  EEPROM.put(ADDR_LAST_COUNT, prevActuationCount);
+  digitalWrite(D_PMOS_GATE, HIGH);
+  EEPROM.put(ADDR_LAST_COUNT, actuationPrevCount);
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Finished!");
-  lcd.setCursor(0, 1);
-  lcd.print(actuationCount);
-  lcd.setCursor(8, 1);
-  lcd.print("/");
-  lcd.setCursor(10, 1);
-  lcd.print(setActuationCount);
+  sprintf(trackProgressString, TRACK_PROGRESS_FORMAT, actuationCount, actuationSetCount);
+  oled.clearDisplay();
+  oled.setCursor(0, 0);
+  oled.println("Finished!");
+  oled.println(trackProgressString);
+  oled.display();
 }
 
 void handleControllerWaiting() {
-  if (buttonUp) {
+  if (acceptButtonUp) {
     controllerState = CTRL_START;
   }
 }
